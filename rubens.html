@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Rubens' Tube</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h1 { color: #ff9d00; }
+        .controls {
+            background: #222;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        input[type="number"] {
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #444;
+            background: #333;
+            color: white;
+            width: 100px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #ff5e00;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:hover { background: #ff7b00; }
+        button.active { background: #00aa00; }
+        
+        canvas {
+            background: #050505;
+            border-bottom: 5px solid #444; /* The 'tube' */
+            box-shadow: 0 0 20px rgba(255, 94, 0, 0.2);
+            max-width: 100%;
+        }
+        .info {
+            margin-top: 15px;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Virtual Rubens' Tube</h1>
+    
+    <div class="controls">
+        <div class="control-group">
+            <label for="velocity">Speed of Sound (m/s)</label>
+            <input type="number" id="velocity" value="258" step="1">
+            <small>Propane: ~258 | Air: 343</small>
+        </div>
+        <div class="control-group">
+            <label for="frequency">Frequency (Hz)</label>
+            <input type="number" id="frequency" value="300" step="1">
+        </div>
+        <div class="control-group">
+            <label>Microphone Input</label>
+            <button id="micBtn">Enable Mic</button>
+        </div>
+    </div>
+
+    <canvas id="tubeCanvas" width="1000" height="300"></canvas>
+    
+    <div class="info">
+        Tube length simulated: <span id="tubeLen">2</span> meters. 
+        Detected Peak Freq: <span id="detectedFreq">N/A</span> Hz.
+    </div>
+
+    <script>
+        const canvas = document.getElementById('tubeCanvas');
+        const ctx = canvas.getContext('2d');
+        const velInput = document.getElementById('velocity');
+        const freqInput = document.getElementById('frequency');
+        const micBtn = document.getElementById('micBtn');
+        const detectedFreqSpan = document.getElementById('detectedFreq');
+
+        const TUBE_LENGTH_METERS = 2.0; 
+        const NUM_FLAMES = 120; // Number of holes in the tube
+        
+        let audioContext;
+        let analyser;
+        let microphone;
+        let isMicEnabled = false;
+        let dataArray;
+
+        // Draw loop parameters
+        let flames = new Array(NUM_FLAMES).fill(0);
+
+        function draw() {
+            requestAnimationFrame(draw);
+            
+            // Clear canvas
+            ctx.fillStyle = 'rgba(5, 5, 5, 0.4)'; // Slight trail effect
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            let currentFreq = parseFloat(freqInput.value);
+            let velocity = parseFloat(velInput.value);
+
+            // If mic is enabled, get dominant frequency
+            if (isMicEnabled && analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                let maxVal = -1;
+                let maxIndex = -1;
+                
+                for (let i = 0; i < dataArray.length; i++) {
+                    if (dataArray[i] > maxVal) {
+                        maxVal = dataArray[i];
+                        maxIndex = i;
+                    }
+                }
+                
+                // Convert FFT bin to actual frequency
+                let nyquist = audioContext.sampleRate / 2;
+                let binSize = nyquist / dataArray.length;
+                let detectedFreq = maxIndex * binSize;
+                
+                // Only update if there's significant volume
+                if (maxVal > 100) { 
+                    currentFreq = detectedFreq;
+                    freqInput.value = Math.round(currentFreq);
+                    detectedFreqSpan.innerText = Math.round(currentFreq);
+                }
+            } else {
+                detectedFreqSpan.innerText = "N/A";
+            }
+
+            // Math: Wavelength = velocity / frequency
+            // Wave number k = 2 * PI / wavelength
+            let wavelength = velocity / (currentFreq || 1); 
+            let k = (2 * Math.PI) / wavelength;
+
+            const flameSpacing = canvas.width / NUM_FLAMES;
+
+            // Draw each flame
+            for (let i = 0; i < NUM_FLAMES; i++) {
+                // Map the loop index to the physical length of the tube (0 to 2 meters)
+                let x_meters = (i / NUM_FLAMES) * TUBE_LENGTH_METERS;
+                
+                // The envelope of a standing wave is proportional to |sin(kx)|
+                // We add a base pressure so flames don't completely disappear
+                let baseHeight = 20;
+                let amplitude = 120;
+                let standingWave = Math.abs(Math.sin(k * x_meters));
+                
+                let targetHeight = baseHeight + (amplitude * standingWave);
+                
+                // Add natural fire flicker
+                let flicker = (Math.random() - 0.5) * 20;
+                targetHeight += flicker;
+
+                // Smoothly animate the flames towards the target height
+                flames[i] += (targetHeight - flames[i]) * 0.2;
+
+                let x_canvas = i * flameSpacing + (flameSpacing / 2);
+                let y_canvas = canvas.height; // Bottom of canvas
+                
+                // Draw the flame
+                let gradient = ctx.createLinearGradient(x_canvas, y_canvas, x_canvas, y_canvas - flames[i]);
+                gradient.addColorStop(0, '#0055ff'); // Blue base
+                gradient.addColorStop(0.2, '#ffaa00'); // Yellow/Orange middle
+                gradient.addColorStop(1, 'rgba(255, 0, 0, 0)'); // Red/transparent tip
+
+                ctx.beginPath();
+                ctx.moveTo(x_canvas - 2, y_canvas);
+                ctx.lineTo(x_canvas + 2, y_canvas);
+                ctx.lineTo(x_canvas + 1, y_canvas - flames[i]);
+                ctx.lineTo(x_canvas - 1, y_canvas - flames[i]);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+            }
+        }
+
+        // Microphone Setup
+        micBtn.addEventListener('click', async () => {
+            if (isMicEnabled) {
+                // Turn off
+                isMicEnabled = false;
+                micBtn.innerText = "Enable Mic";
+                micBtn.classList.remove('active');
+                if (microphone) microphone.disconnect();
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 4096; // Higher resolution for frequency detection
+                
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                isMicEnabled = true;
+                micBtn.innerText = "Disable Mic";
+                micBtn.classList.add('active');
+                
+                // Ensure audio context is running
+                if (audioContext.state === 'suspended') {
+                    audioContext.resume();
+                }
+            } catch (err) {
+                console.error("Error accessing microphone:", err);
+                alert("Could not access microphone. Please ensure you have granted permissions.");
+            }
+        });
+
+        // Start animation loop
+        draw();
+    </script>
+</body>
+</html>
